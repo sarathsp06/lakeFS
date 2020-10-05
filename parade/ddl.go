@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v4"
 	"github.com/jmoiron/sqlx"
 	nanoid "github.com/matoous/go-nanoid"
+	"github.com/treeverse/lakefs/logging"
 )
 
 type TaskID string
@@ -20,7 +21,7 @@ type ActorID string
 
 type PerformanceToken pgtype.UUID
 
-// nolint:stylecheck (change name from src below)
+// nolint: stylecheck
 func (dst *PerformanceToken) Scan(src interface{}) error {
 	var scanned pgtype.UUID
 	if err := scanned.Scan(src); err != nil {
@@ -246,7 +247,11 @@ func WaitForTask(ctx context.Context, conn *pgx.Conn, taskID TaskID) (resultStat
 	}
 	defer func() {
 		if tx != nil {
-			tx.Rollback(ctx)
+			// No useful error handling for an error here, return value is
+			// already out there.  Just log.
+			if err := tx.Rollback(ctx); err != nil {
+				logging.FromContext(ctx).Errorf("rollback after error: %s", err)
+			}
 		}
 	}()
 	row := tx.QueryRow(ctx, `SELECT finish_channel, status_code, status FROM tasks WHERE id=$1`, taskID)
@@ -281,7 +286,7 @@ func WaitForTask(ctx context.Context, conn *pgx.Conn, taskID TaskID) (resultStat
 		err = fmt.Errorf("query status for task %s: %w", taskID, err)
 	}
 	if err == nil {
-		tx.Commit(ctx)
+		err = tx.Commit(ctx)
 		tx = nil
 	}
 	return status, statusCode, err
