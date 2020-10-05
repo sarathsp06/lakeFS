@@ -125,7 +125,7 @@ func (td *TaskDataIterator) Values() ([]interface{}, error) {
 	}
 	value := td.Data[td.next-1]
 	// Convert ToSignal to a text array so pgx can convert it to text.  Needed because Go
-	// types
+	// types.
 	toSignal := make([]string, len(value.ToSignal))
 	for i := 0; i < len(value.ToSignal); i++ {
 		toSignal[i] = string(value.ToSignal[i])
@@ -155,7 +155,6 @@ var TaskDataColumnNames = []string{
 
 var tasksTable = pgx.Identifier{"tasks"}
 
-// InsertTasks adds multiple tasks efficiently.
 func InsertTasks(ctx context.Context, conn *pgx.Conn, source pgx.CopyFromSource) error {
 	_, err := conn.CopyFrom(ctx, tasksTable, TaskDataColumnNames, source)
 	return err
@@ -192,8 +191,6 @@ func OwnTasks(conn *sqlx.DB, actor ActorID, maxTasks int, actions []string, maxD
 	return tasks, nil
 }
 
-var ErrInvalidToken = errors.New("performance token invalid (action may have exceeded deadline)")
-
 // ExtendTaskDeadline extends the deadline for completing taskID which was acquired with the
 // specified token, for maxDuration longer.  It returns nil if the task is still owned and its
 // deadline was extended, or an SQL error, or ErrInvalidToken.  deadline was extended.
@@ -217,7 +214,7 @@ func ExtendTaskDeadline(conn *sqlx.DB, taskID TaskID, token PerformanceToken, ma
 }
 
 // ReturnTask returns taskId which was acquired using the specified performanceToken, giving it
-// resultStatus and resultStatusCode.  It returns InvalidTokenError if the performanceToken is
+// resultStatus and resultStatusCode.  It returns ErrInvalidToken if the performanceToken is
 // invalid; this happens when ReturnTask is called after its deadline expires, or due to a logic
 // error.
 func ReturnTask(conn *sqlx.DB, taskID TaskID, token PerformanceToken, resultStatus string, resultStatusCode TaskStatusCodeValue) error {
@@ -239,11 +236,6 @@ func ReturnTask(conn *sqlx.DB, taskID TaskID, token PerformanceToken, resultStat
 
 	return nil
 }
-
-var (
-	ErrBadStatus       = errors.New("bad status for task")
-	ErrNoFinishChannel = errors.New("task has no Finishchannel")
-)
 
 // WaitForTask blocks until taskId ends, and returns its result status and status code.  It
 // needs a pgx.Conn -- *not* a sqlx.Conn -- because it depends on PostgreSQL specific features.
