@@ -240,23 +240,33 @@ func ReturnTask(conn *sqlx.DB, taskID TaskID, token PerformanceToken, resultStat
 // WaitForTask blocks until taskId ends, and returns its result status and status code.  It
 // needs a pgx.Conn -- *not* a sqlx.Conn -- because it depends on PostgreSQL specific features.
 func WaitForTask(ctx context.Context, conn *pgx.Conn, taskID TaskID) (resultStatus string, resultStatusCode TaskStatusCodeValue, err error) {
-	row := conn.QueryRow(ctx, `SELECT finish_channel, status_code FROM tasks WHERE id=$1`, taskID)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return "", TaskInvalid, fmt.Errorf("BEGIN: %w", err)
+	}
+	defer func() {
+		if tx != nil {
+			tx.Rollback(ctx)
+		}
+	}()
+	row := tx.QueryRow(ctx, `SELECT finish_channel, status_code, status FROM tasks WHERE id=$1`, taskID)
 	var (
 		finishChannel string
 		statusCode    TaskStatusCodeValue = TaskInvalid
 		status        string              = "invalid"
 	)
-	if err = row.Scan(&finishChannel, &statusCode); err != nil {
+	if err = row.Scan(&finishChannel, &statusCode, &status); err != nil {
 		return status, statusCode, fmt.Errorf("check task %s to listen: %w", taskID, err)
 	}
 	if statusCode != TaskInProgress && statusCode != TaskPending {
-		return status, statusCode, fmt.Errorf("task %s already in status %s: %w", taskID, statusCode, ErrBadStatus)
+		// Already done, no need to sleep.
+		return status, statusCode, nil
 	}
 	if finishChannel == "" {
 		return status, statusCode, fmt.Errorf("cannot wait for task %s: %w", taskID, ErrNoFinishChannel)
 	}
 
-	if _, err = conn.Exec(ctx, "LISTEN "+pgx.Identifier{finishChannel}.Sanitize()); err != nil {
+	if _, err = tx.Exec(ctx, "LISTEN "+pgx.Identifier{finishChannel}.Sanitize()); err != nil {
 		return "", TaskInvalid, fmt.Errorf("listen for %s: %w", finishChannel, err)
 	}
 
@@ -265,10 +275,14 @@ func WaitForTask(ctx context.Context, conn *pgx.Conn, taskID TaskID) (resultStat
 		return "", TaskInvalid, fmt.Errorf("wait for notification %s: %w", finishChannel, err)
 	}
 
-	row = conn.QueryRow(ctx, `SELECT status, status_code FROM tasks WHERE id=$1`, taskID)
+	row = tx.QueryRow(ctx, `SELECT status, status_code FROM tasks WHERE id=$1`, taskID)
 	err = row.Scan(&status, &statusCode)
 	if err != nil {
 		err = fmt.Errorf("query status for task %s: %w", taskID, err)
+	}
+	if err == nil {
+		tx.Commit(ctx)
+		tx = nil
 	}
 	return status, statusCode, err
 }
